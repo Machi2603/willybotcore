@@ -1,36 +1,53 @@
 import 'dotenv/config';
 import axios from 'axios';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once(Events.ClientReady, (c) => {
+  console.log(`Logged in as ${c.user.tag}`);
 });
 
-client.on('interactionCreate', async (interaction) => {
+client.on(Events.InteractionCreate, async (interaction) => {
+  // Log mínimo para ver que llegan interacciones
+  console.log('[interaction]', {
+    type: interaction.type,
+    isChatInput: interaction.isChatInputCommand?.(),
+    commandName: interaction.commandName,
+    applicationId: interaction.applicationId,
+    guildId: interaction.guildId,
+    channelId: interaction.channelId,
+    user: interaction.user?.username,
+  });
+
   try {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== 'willybot') return;
 
     const texto = interaction.options.getString('texto', true);
+    console.log('[willybot] texto:', texto);
 
-    // Regla 3 segundos
     await interaction.deferReply();
 
-    // Llamada a n8n
-    const { data } = await axios.post(process.env.N8N_WEBHOOK_URL, {
-      texto,
-      userId: interaction.user.id,
-      userName: interaction.user.username,
-      channelId: interaction.channelId,
-      guildId: interaction.guildId
-    }, { timeout: 120000 });
+    console.log('[willybot] calling n8n:', process.env.N8N_WEBHOOK_URL);
+    const { data } = await axios.post(
+      process.env.N8N_WEBHOOK_URL,
+      {
+        texto,
+        userId: interaction.user.id,
+        userName: interaction.user.username,
+        channelId: interaction.channelId,
+        guildId: interaction.guildId,
+      },
+      { timeout: 120000 }
+    );
 
     const answer = (data && (data.answer || data.text || data.message)) ?? 'No he recibido respuesta válida.';
+    console.log('[willybot] n8n answer length:', String(answer).length);
+
     await interaction.editReply(String(answer).slice(0, 2000));
   } catch (err) {
-    console.error(err);
+    console.error('[willybot] ERROR:', err?.response?.data || err);
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply('Error procesando tu solicitud.');
     } else {
