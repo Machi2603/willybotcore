@@ -26,7 +26,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (cmd !== 'willybot' && cmd !== 'censura') return;
 
     // Regla 3s: ACK inmediato siempre
-    await interaction.deferReply({ ephemeral: cmd === 'censura' });
+    await interaction.deferReply();
 
     // Payload base (lo que n8n necesita para rutear y guardar por usuario)
     const payload = {
@@ -85,3 +85,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
+
