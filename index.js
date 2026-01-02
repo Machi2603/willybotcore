@@ -1,19 +1,116 @@
 import 'dotenv/config';
 import axios from 'axios';
+import { Readable } from 'node:stream';
 import { Client, GatewayIntentBits, Events } from 'discord.js';
+import {
+  AudioPlayerStatus,
+  StreamType,
+  VoiceConnectionStatus,
+  createAudioPlayer,
+  createAudioResource,
+  entersState,
+  joinVoiceChannel,
+} from '@discordjs/voice';
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const activeVoiceByGuild = new Map(); // guildId -> { connection, player }
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+});
 
 client.once(Events.ClientReady, (c) => {
   console.log(`Logged in as ${c.user.tag}`);
 });
+
+async function handleWillyTTS(interaction) {
+  const mensaje = interaction.options.getString('mensaje', true);
+
+  if (!interaction.guild) {
+    await interaction.editReply('Este comando solo funciona dentro de un servidor.');
+    return;
+  }
+
+  // Detectar canal de voz del usuario
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const voiceChannel = member.voice?.channel ?? null;
+
+  if (!voiceChannel) {
+    await interaction.editReply('Conéctate a un canal de voz primero.');
+    return;
+  }
+
+  // Mensaje público en el chat
+  await interaction.editReply(`WillyTTS: ${mensaje}`);
+
+  // Si ya había algo sonando en el server, lo cortamos
+  const prev = activeVoiceByGuild.get(interaction.guildId);
+  if (prev?.connection) {
+    try { prev.player?.stop(true); } catch {}
+    try { prev.connection.destroy(); } catch {}
+    activeVoiceByGuild.delete(interaction.guildId);
+  }
+
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  if (!apiKey || !voiceId) {
+    await interaction.followUp('Faltan ELEVENLABS_API_KEY o ELEVENLABS_VOICE_ID en las variables de entorno.');
+    return;
+  }
+
+  const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+  const outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT || 'opus_48000_64';
+
+  // Conectar a voz
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: voiceChannel.guild.id,
+    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+    selfDeaf: true,
+  });
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+
+    const player = createAudioPlayer();
+    connection.subscribe(player);
+    activeVoiceByGuild.set(interaction.guildId, { connection, player });
+
+    // Pedir TTS a ElevenLabs (audio Ogg Opus)
+    const url =
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}` +
+      `?output_format=${encodeURIComponent(outputFormat)}&enable_logging=false`;
+
+    const { data } = await axios.post(
+      url,
+      { text: mensaje, model_id: modelId },
+      {
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        headers: {
+          Accept: 'audio/ogg',
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+      }
+    );
+
+    const audioStream = Readable.from(Buffer.from(data));
+    const resource = createAudioResource(audioStream, { inputType: StreamType.OggOpus });
+    player.play(resource);
+
+    await entersState(player, AudioPlayerStatus.Playing, 15_000);
+    await entersState(player, AudioPlayerStatus.Idle, 10 * 60 * 1000);
+  } finally {
+    try { connection.destroy(); } catch {}
+    activeVoiceByGuild.delete(interaction.guildId);
+  }
+}
 
 client.on(Events.InteractionCreate, async (interaction) => {
   console.log('[interaction]', {
     type: interaction.type,
     isChatInput: interaction.isChatInputCommand?.(),
     commandName: interaction.commandName,
-    applicationId: interaction.applicationId,
     guildId: interaction.guildId,
     channelId: interaction.channelId,
     user: interaction.user?.username,
@@ -23,40 +120,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     const cmd = interaction.commandName;
-    if (cmd !== 'willybot' && cmd !== 'censura') return;
+    if (cmd !== 'willybot' && cmd !== 'censura' && cmd !== 'willytts') return;
 
-    // Regla 3s: ACK inmediato siempre
+    // Regla 3s: defer siempre primero
     await interaction.deferReply();
 
-    // Payload base (lo que n8n necesita para rutear y guardar por usuario)
+    // /willytts no pasa por n8n
+    if (cmd === 'willytts') {
+      await handleWillyTTS(interaction);
+      return;
+    }
+
+    // Payload hacia n8n (willybot/censura)
     const payload = {
-      command: cmd,                  // para Switch en n8n
-      interactionId: interaction.id, // opcional, útil para logs
+      command: cmd,
+      interactionId: interaction.id,
       userId: interaction.user.id,
       userName: interaction.user.username,
       channelId: interaction.channelId,
       guildId: interaction.guildId,
-      options: {},                   // todas las opciones del comando aquí
+      options: {},
     };
 
-    // Opciones por comando (y compatibilidad hacia atrás)
     if (cmd === 'willybot') {
       const texto = interaction.options.getString('texto', true);
-      console.log('[willybot] texto:', texto);
-      payload.texto = texto;                 // compatibilidad
-      payload.options.texto = texto;         // recomendado
+      payload.texto = texto;
+      payload.options.texto = texto;
     }
 
     if (cmd === 'censura') {
       const activada = interaction.options.getBoolean('activada', true);
-      console.log('[censura] activada:', activada);
-      payload.activada = activada;           // compatibilidad
-      payload.options.activada = activada;   // recomendado
+      payload.activada = activada;
+      payload.options.activada = activada;
     }
 
-    console.log(`[${cmd}] calling n8n:`, process.env.N8N_WEBHOOK_URL);
-
-    // (Opcional) secreto compartido para que nadie te llame el webhook
     const headers = process.env.WILLYBOT_SECRET
       ? { 'x-willybot-secret': process.env.WILLYBOT_SECRET }
       : {};
@@ -69,8 +166,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const answer =
       (data && (data.answer || data.text || data.message)) ??
       'No he recibido respuesta válida.';
-
-    console.log(`[${cmd}] n8n answer length:`, String(answer).length);
 
     await interaction.editReply(String(answer).slice(0, 2000));
   } catch (err) {
@@ -85,4 +180,3 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
-
