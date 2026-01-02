@@ -23,14 +23,26 @@ const censuraCommand = new SlashCommandBuilder()
       .setRequired(true)
   );
 
+// /willytts mensaje: "..."
+const willyttsCommand = new SlashCommandBuilder()
+  .setName('willytts')
+  .setDescription('Lee un mensaje con voz usando ElevenLabs')
+  .addStringOption(opt =>
+    opt.setName('mensaje')
+      .setDescription('Texto que WillyBot dirá en voz alta')
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(500)
+  );
+
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
 
 async function main() {
   await rest.put(
     Routes.applicationCommands(process.env.CLIENT_ID), // GLOBAL
-    { body: [willybotCommand.toJSON(), censuraCommand.toJSON()] }
+    { body: [willybotCommand.toJSON(), censuraCommand.toJSON(), willyttsCommand.toJSON()] }
   );
-  console.log('Slash commands GLOBAL registrados: /willybot y /censura');
+  console.log('Slash commands GLOBAL registrados: /willybot, /censura y /willytts');
 }
 
 main().catch(console.error);
