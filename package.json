@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "register": "node register-commands.js"
+    "register:aislar": "node register-aislar-context.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
@@ -19,3 +20,4 @@
     "@snazzah/davey": "^0.1.9"
   }
 }
+
