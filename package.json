@@ -1,3 +1,7 @@
+"scripts": {
+  "start": "node index.js",
+  "register": "node register-commands.js"
+}
 {
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
@@ -7,3 +11,4 @@
     "dotenv": "^16.4.5"
   }
 }
+
