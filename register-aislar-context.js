@@ -16,20 +16,20 @@ const cmd = new ContextMenuCommandBuilder()
 
 async function main() {
   const clientId = process.env.CLIENT_ID;
-  if (!clientId) throw new Error('Falta CLIENT_ID en variables de entorno.');
+  if (!clientId) throw new Error('Falta CLIENT_ID.');
 
-  // 1) Leer comandos existentes
+  // Leer comandos globales existentes
   const existing = await rest.get(Routes.applicationCommands(clientId));
 
-  // 2) Buscar si ya existe un User Context con ese nombre
+  // Buscar si ya existe
   const found = existing.find(c => c.name === COMMAND_NAME && c.type === ApplicationCommandType.User);
 
   if (found) {
-    // 3A) Si existe, lo actualizamos (PATCH)
+    // Actualizar
     await rest.patch(Routes.applicationCommand(clientId, found.id), { body: cmd.toJSON() });
     console.log(`Context command actualizado: ${COMMAND_NAME}`);
   } else {
-    // 3B) Si no existe, lo creamos (POST)
+    // Crear
     await rest.post(Routes.applicationCommands(clientId), { body: cmd.toJSON() });
     console.log(`Context command creado: ${COMMAND_NAME}`);
   }
