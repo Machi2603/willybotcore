@@ -1,14 +1,18 @@
-"scripts": {
-  "start": "node index.js",
-  "register": "node register-commands.js"
-}
 {
+  "name": "willybot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "register": "node register-commands.js"
+  },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.16.1",
+    "@snazzah/davey": "^0.2.2",
     "axios": "^1.7.7",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
   }
 }
-
