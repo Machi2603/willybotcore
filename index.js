@@ -40,10 +40,18 @@ async function handleWillyTTS(interaction) {
     return;
   }
 
+  // Comprobar permisos del bot (Connect/Speak)
+  const me = await interaction.guild.members.fetchMe();
+  const perms = voiceChannel.permissionsFor(me);
+  if (!perms?.has(['Connect', 'Speak'])) {
+    await interaction.editReply('No tengo permisos para hablar en ese canal (Connect/Speak).');
+    return;
+  }
+
   // Mensaje público en el chat
   await interaction.editReply(`WillyTTS: ${mensaje}`);
 
-  // Si ya había algo sonando en el server, lo cortamos
+  // Cortar audio anterior en ese server (si lo hubiese)
   const prev = activeVoiceByGuild.get(interaction.guildId);
   if (prev?.connection) {
     try { prev.player?.stop(true); } catch {}
@@ -53,15 +61,70 @@ async function handleWillyTTS(interaction) {
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const voiceId = process.env.ELEVENLABS_VOICE_ID;
+
   if (!apiKey || !voiceId) {
-    await interaction.followUp('Faltan ELEVENLABS_API_KEY o ELEVENLABS_VOICE_ID en las variables de entorno.');
+    await interaction.followUp('Faltan ELEVENLABS_API_KEY o ELEVENLABS_VOICE_ID en variables de entorno.');
     return;
   }
 
   const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
   const outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT || 'opus_48000_64';
 
-  // Conectar a voz
+  // 1) PEDIR TTS PRIMERO (si esto falla, NO entramos a voz)
+  const url =
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}` +
+    `?output_format=${encodeURIComponent(outputFormat)}&enable_logging=false`;
+
+  const tts = await axios.post(
+    url,
+    { text: mensaje, model_id: modelId },
+    {
+      responseType: 'arraybuffer',
+      timeout: 120000,
+      validateStatus: () => true, // no lanzar excepción automática
+      headers: {
+        Accept: 'audio/ogg',
+        'Content-Type': 'application/json',
+        'xi-api-key': apiKey,
+      },
+    }
+  );
+
+  const contentType = String(tts.headers?.['content-type'] || '');
+  const buf = Buffer.from(tts.data || []);
+
+  // Si NO es audio, es error JSON/texto. Lo mostramos y salimos.
+  if (tts.status < 200 || tts.status >= 300 || !contentType.startsWith('audio/')) {
+    const text = buf.toString('utf8');
+
+    console.error('[willytts] ElevenLabs ERROR', {
+      status: tts.status,
+      contentType,
+      body: text,
+    });
+
+    const resumen = text.length > 180 ? text.slice(0, 180) + '...' : text;
+    await interaction.followUp(
+      `ElevenLabs devolvió error (${tts.status}). Revisa logs. Detalle: ${resumen}`
+    );
+    return;
+  }
+
+  // 2) SI ES AUDIO, AHORA SÍ ENTRAMOS A VOZ Y REPRODUCIMOS
+  let stream;
+  let inputType;
+
+  try {
+    // demuxProbe necesita un stream; lo creamos desde el buffer
+    const { stream: s, type } = await demuxProbe(Readable.from(buf));
+    stream = s;
+    inputType = type;
+  } catch {
+    // fallback seguro: recreamos stream desde el buffer
+    stream = Readable.from(buf);
+    inputType = StreamType.OggOpus;
+  }
+
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
     guildId: voiceChannel.guild.id,
@@ -76,27 +139,7 @@ async function handleWillyTTS(interaction) {
     connection.subscribe(player);
     activeVoiceByGuild.set(interaction.guildId, { connection, player });
 
-    // Pedir TTS a ElevenLabs (audio Ogg Opus)
-    const url =
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}` +
-      `?output_format=${encodeURIComponent(outputFormat)}&enable_logging=false`;
-
-    const { data } = await axios.post(
-      url,
-      { text: mensaje, model_id: modelId },
-      {
-        responseType: 'arraybuffer',
-        timeout: 120000,
-        headers: {
-          Accept: 'audio/ogg',
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey,
-        },
-      }
-    );
-
-    const audioStream = Readable.from(Buffer.from(data));
-    const resource = createAudioResource(audioStream, { inputType: StreamType.OggOpus });
+    const resource = createAudioResource(stream, { inputType });
     player.play(resource);
 
     await entersState(player, AudioPlayerStatus.Playing, 15_000);
@@ -126,7 +169,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Regla 3s: defer siempre primero
     await interaction.deferReply();
 
-    // /willytts no pasa por n8n
     if (cmd === 'willytts') {
       await handleWillyTTS(interaction);
       return;
@@ -181,4 +223,3 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
-
